@@ -1,0 +1,18 @@
+{
+  "Q1": {
+    "question": "Explain the concept of backpropagation in neural networks.",
+    "max_marks": 10
+  },
+  "Q2": {
+    "question": "What is overfitting in machine learning? How can it be prevented?",
+    "max_marks": 5
+  },
+  "Q3": {
+    "question": "Define gradient descent and explain its role in training neural networks.",
+    "max_marks": 5
+  },
+  "Q4": {
+    "question": "What is the difference between classification and regression in machine learning?",
+    "max_marks": 5
+  }
+}

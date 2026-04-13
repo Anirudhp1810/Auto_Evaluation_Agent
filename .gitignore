@@ -1,0 +1,50 @@
+# Environment variables (Sensitive)
+.env
+.env.local
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Specific to this project
+evaluations.db
+evaluations.db-journal
+uploads/
+results/
+*.log
+
+# Streamlit
+.streamlit/
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Temporary files
+scratch/
+test_fix.py
+report_fix_final.log
+eval_manual_all.log
+eval_debug.log
+pdf_gen_debug.log
