@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-streamlit
 python-multipart
 sqlalchemy
 google-generativeai
@@ -10,7 +9,5 @@ pdf2image
 pytesseract
 requests
 fpdf2
-plotly
-pandas
 langchain-community
 opencv-python

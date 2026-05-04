@@ -33,8 +33,7 @@ uploads/
 results/
 *.log
 
-# Streamlit
-.streamlit/
+
 
 # IDEs
 .vscode/

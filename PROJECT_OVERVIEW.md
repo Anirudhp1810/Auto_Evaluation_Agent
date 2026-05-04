@@ -10,12 +10,13 @@ This project is an AI-powered student answer sheet evaluation system that levera
    - 🧠 **Grader Agent**: An experienced evaluator responsible for contrasting extracted student answers against standard answer keys (rubrics), outputting valid structured JSON scores with reasons.
    - 📊 **Reporter Agent**: A compassionate educator that synthesizes JSON grade artifacts, converting them into structured, constructive, and motivating reports emphasizing strengths and providing study tips.
 3. **Local Privacy-First Processing**: Uses `llama3` running locally via **Ollama**, ensuring student data logic is processed completely offline without third-party API dependencies.
-4. **Interactive Dashboard**: A user-friendly Streamlit web application providing a split-pane interface. Users can input a dynamic rubric on the sidebar, upload PDF/image answer scripts on the main pane, and immediately kick off the CrewAI pipeline to view and download reports.
+4. **Interactive Dashboard**: A user-friendly React web application connected to a FastAPI backend. Users can input a dynamic rubric, upload PDF/image answer scripts, and immediately kick off the pipeline to view and download reports.
 
 ## 🛠️ Technology Stack
 - **Frameworks**: [CrewAI](https://crewai.com/) (Agent Orchestration), [LangChain](https://langchain.com/) (LLM chaining utility abstractions)
 - **Local AI Provider**: [Ollama](https://ollama.com/) running `llama3`
-- **Frontend / UI**: [Streamlit](https://streamlit.io/)
+- **Frontend / UI**: [React](https://reactjs.org/) + [Vite](https://vitejs.dev/)
+- **Backend API**: [FastAPI](https://fastapi.tiangolo.com/)
 - **Document Processing**: `PyMuPDF` (text-based PDF text extraction), `PyTesseract` + `Pillow` (Optical Character Recognition)
 
 ## 📁 Project Structure
@@ -31,7 +32,8 @@ This project is an AI-powered student answer sheet evaluation system that levera
 │   ├── grades.json     # Raw json output from Grader agent.
 │   └── report.txt      # Synthesized txt report from Reporter agent.
 ├── crew.py             # Instantiates the Crew, task definitions, & logic.
-├── dashboard.py        # Main entrypoint Streamlit user-interface.
+├── frontend/           # Main entrypoint React user-interface.
+├── main.py             # FastAPI backend server.
 └── rubric.txt          # Transient file storing the dynamic correct answers for grading.
 ```
 
@@ -55,8 +57,15 @@ pip install crewai langchain-community pytesseract pymupdf pillow streamlit
 ```
 
 ### Running the System
-Start the dashboard UI server in your terminal via the Streamlit CLI:
+Start the FastAPI backend server:
 ```bash
-streamlit run dashboard.py
+python -m uvicorn main:app --port 8000
 ```
-Open up your browser to the local port (usually `http://localhost:8501`). Add in your correct answers into the sidebar rubric utility, and upload the student's sheet to evaluate!
+
+Start the React frontend server in a new terminal:
+```bash
+cd frontend
+npm run dev
+```
+
+Open up your browser to the local port (usually `http://localhost:5173`). Add in your correct answers into the rubric utility, and upload the student's sheet to evaluate!
