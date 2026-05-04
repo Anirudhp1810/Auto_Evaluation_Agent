@@ -54,6 +54,8 @@ def migrate():
             ocr_text TEXT,
             rubrics_json TEXT,
             passing_marks INTEGER,
+            division TEXT DEFAULT 'A',
+            exam_type TEXT DEFAULT 'ISA-1',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         """),
         ("evaluations", """
@@ -95,6 +97,8 @@ def migrate():
         ("submissions", "total_marks", "REAL DEFAULT 0"),
         ("submissions", "passing_marks", "INTEGER DEFAULT 0"),
         ("submissions", "status", "TEXT DEFAULT 'pending'"),
+        ("submissions", "division", "TEXT DEFAULT 'A'"),
+        ("submissions", "exam_type", "TEXT DEFAULT 'ISA-1'"),
         ("evaluations", "breakdown_json", "TEXT DEFAULT '[]'"),
         ("evaluations", "pdf_path", "TEXT DEFAULT ''"),
         ("evaluations", "status", "TEXT DEFAULT 'evaluated'"),

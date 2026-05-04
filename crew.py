@@ -1,16 +1,19 @@
-from crewai import Crew, Task, LLM
-from agents.grader import create_grader, create_grading_task
-from agents.reporter import create_reporter, create_report_task
-from agents.extractor import create_extractor, create_extraction_task
-from tools.pdf_reader import extract_text_from_pdf
 import sqlite3
 import json
 import re
 import os
 from datetime import datetime
+import google.generativeai as genai
+from dotenv import load_dotenv
 
-# Load local LLM
-llm = LLM(model="ollama/llama3", base_url="http://localhost:11434")
+load_dotenv()
+
+from dotenv import load_dotenv
+import requests
+
+load_dotenv()
+
+# We are no longer using Gemini! The system will now use local Llama 3.
 
 def clean_json_output(output_text: str) -> dict:
     """Extracts and parses JSON from LLM output, handling markdown blocks and other noise."""
@@ -43,69 +46,135 @@ def clean_json_output(output_text: str) -> dict:
         print(f"JSON Parse Warning: {e}")
         return {}
 
-def evaluate_answer_sheet(pdf_path: str, student_name: str) -> str:
-    """Main entry point for evaluating a single PDF. Extracted for CLI or simple scripts."""
-    raw_text = extract_text_from_pdf(pdf_path)
-    
-    with open("rubric.txt", "r") as f:
-        rubric = f.read()
-
-    grader = create_grader(llm)
-    reporter = create_reporter(llm)
-
-    task2 = create_grading_task(grader, raw_text, rubric)
-    grader_result = Crew(agents=[grader], tasks=[task2], verbose=True).kickoff()
-    
-    grades_data = clean_json_output(str(grader_result))
-    
-    total_score = sum(float(q.get("score", 0)) for q in grades_data.values() if isinstance(q, dict))
-    total_max = sum(float(q.get("max", 10)) for q in grades_data.values() if isinstance(q, dict))
-
-    task3 = create_report_task(reporter, json.dumps(grades_data) if grades_data else str(grader_result), total_score, total_max)
-    result = Crew(agents=[reporter], tasks=[task3], verbose=True).kickoff()
-    
-    return str(result)
-
 def run_grading_agents(raw_text: str, rubric_json_str: str) -> dict:
-    """Invokes extractor, grader and reporter agents sequentially. Used by dashboard."""
-    # 1. Initialize Agents
-    extractor = create_extractor(llm)
-    grader = create_grader(llm)
-    reporter = create_reporter(llm)
+    """Invokes Gemini directly to evaluate the extracted answers against the rubric."""
+    prompt = f"""
+You are an expert AI grader evaluator. 
+Evaluate the following student's extracted answers against the provided Rubric JSON.
 
-    # 2. Extract Answers from Raw Text (OCR cleanup)
-    task1 = create_extraction_task(extractor, raw_text, rubric_json_str)
-    extraction_result = Crew(agents=[extractor], tasks=[task1], verbose=True).kickoff()
-    
-    extracted_text = str(extraction_result)
-    print(f"--- Extracted Text ---\n{extracted_text}\n----------------------")
+Student's Extracted Answers (from OCR):
+{raw_text}
 
-    # 3. Grade the Extracted Answers
-    task2 = create_grading_task(grader, extracted_text, rubric_json_str)
-    grader_result = Crew(agents=[grader], tasks=[task2], verbose=True).kickoff()
-    
-    grader_output = str(grader_result)
-    grades_data = clean_json_output(grader_output)
-    
-    total_score = 0
-    total_max = 0
-    for q_id, q_data in grades_data.items():
-        if isinstance(q_data, dict):
-            total_score += float(q_data.get("score", 0))
-            total_max += float(q_data.get("max", 10))
+Rubric JSON (Answer Key & Marks):
+{rubric_json_str}
 
-    # 4. Generate Final Report
-    task3 = create_report_task(reporter, json.dumps(grades_data) if grades_data else grader_output, total_score, total_max)
-    report_result = Crew(agents=[reporter], tasks=[task3], verbose=True).kickoff()
+Output your evaluation strictly in the following JSON format:
+{{
+    "grades": {{
+        "1": {{"score": 5, "max": 10, "reason": "explanation of marks awarded/deducted"}},
+        "2": {{"score": 10, "max": 10, "reason": "perfect answer"}}
+    }},
+    "report_text": "Write a friendly, paragraph-long overview summarizing the student's performance, highlighting strengths and suggesting areas for improvement."
+}}
+
+Do not add extra markdown formatting around the output, just valid JSON output.
+The keys inside "grades" must perfectly match the question numbers in the rubric.
+"""
+
+    provider = os.environ.get("AI_PROVIDER", "ollama").lower()
     
-    return {
-        "grades_data": grades_data,
-        "total_score": total_score,
-        "total_max": total_max,
-        "report_text": str(report_result),
-        "raw_grader_output": grader_output,
-        "extracted_answers": extracted_text
-    }
+    try:
+        if provider == "gemini":
+            print("Sending evaluation request to Google Gemini API...")
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise Exception("GEMINI_API_KEY is not set in settings.")
+            
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-1.5-pro")
+            response = model.generate_content(prompt)
+            grader_output = response.text
+        else:
+            print("Sending evaluation request to Local Ollama...")
+            ollama_model = os.environ.get("OLLAMA_MODEL", "llama3")
+            payload = {
+                "model": ollama_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"num_ctx": 8192}
+            }
+            res = requests.post("http://127.0.0.1:11434/api/generate", json=payload)
+            res.raise_for_status()
+            grader_output = res.json().get("response", "")
+        
+        try:
+            start_idx = grader_output.find('{')
+            end_idx = grader_output.rfind('}') + 1
+            json_str = grader_output[start_idx:end_idx]
+            data = json.loads(json_str)
+            
+            grades_data = data.get("grades", {})
+            report_text = data.get("report_text", "AI Evaluation Completed.")
+        except Exception as e:
+            print(f"Error parsing Gemini response root JSON: {e}. Attempting fallback parser.")
+            grades_data = clean_json_output(grader_output)
+            report_text = "AI evaluation completed but detailed feedback synthesis failed."
+
+        total_score = 0
+        total_max = 0
+        for q_id, q_data in grades_data.items():
+            if isinstance(q_data, dict):
+                total_score += float(q_data.get("score", 0))
+                total_max += float(q_data.get("max", 10))
+
+        return {
+            "grades_data": grades_data,
+            "total_score": total_score,
+            "total_max": total_max,
+            "report_text": report_text,
+            "raw_grader_output": grader_output,
+            "extracted_answers": raw_text
+        }
+    except Exception as e:
+        return {}
+
+def generate_class_insight(class_data: list) -> dict:
+    """Takes a list of student performance data (grades, question scores, comments) and asks the LLM to generate class-level insights."""
+    if not class_data:
+        return {"summary": "No evaluation data available to analyze.", "strengths": [], "weaknesses": [], "recommendations": []}
+
+    data_str = json.dumps(class_data, indent=2)
+    prompt = f"""
+You are an expert AI Education Analyst. 
+Analyze the following detailed performance data for a class. It includes the overall grades, question-by-question marks, and specific grader comments for students.
+
+Class Performance Data:
+{data_str}
+
+Based strictly on this data, provide a highly accurate class-level insight report. Look at which questions have low marks and read the associated comments to identify the actual weaknesses. Look at high marks to identify strengths.
+
+Output strictly in the following JSON format:
+{{
+    "summary": "A friendly 2-3 sentence overview of the class's general performance and overall accuracy.",
+    "strengths": ["Specific Topic/Concept from questions they scored high on", "Another specific strength"],
+    "weaknesses": ["Specific topic/concept from questions they scored poorly on", "Another specific weakness"],
+    "recommendations": ["Actionable advice for the teacher on what topics to review next", "Another specific recommendation"]
+}}
+Do not add extra markdown formatting, only valid JSON. Do not hallucinate. Base everything strictly on the data provided.
+"""
+
+    provider = os.environ.get("AI_PROVIDER", "ollama").lower()
+    
+    try:
+        if provider == "gemini":
+            api_key = os.environ.get("GEMINI_API_KEY")
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-1.5-pro")
+            response = model.generate_content(prompt)
+            output = response.text
+        else:
+            ollama_model = os.environ.get("OLLAMA_MODEL", "llama3")
+            payload = {"model": ollama_model, "prompt": prompt, "stream": False, "options": {"num_ctx": 8192}}
+            res = requests.post("http://127.0.0.1:11434/api/generate", json=payload)
+            res.raise_for_status()
+            output = res.json().get("response", "")
+            
+        start_idx = output.find('{')
+        end_idx = output.rfind('}') + 1
+        return json.loads(output[start_idx:end_idx])
+    except Exception as e:
+        print(f"Insight Gen Error: {e}")
+        return {"summary": "Failed to generate insights due to AI error.", "strengths": [], "weaknesses": [], "recommendations": []}
 
 def execute_grading_pipeline(sub_id, file_path, ocr_text, rubrics_json_str, total_marks, pass_marks, s_name, s_id, s_roll, exam_name):
     """Refactored high-level pipeline for AI grading, PDF generation, and DB updates."""
@@ -141,6 +210,9 @@ def execute_grading_pipeline(sub_id, file_path, ocr_text, rubrics_json_str, tota
         calc_total_score = result.get('total_score', 0)
         report_text = result.get('report_text', '')
         grades_data = result.get('grades_data', {})
+
+        if not grades_data and not report_text:
+            raise Exception("No evaluation was returned by the AI agent.")
 
         for q_id, q_data in grades_data.items():
             breakdown.append({

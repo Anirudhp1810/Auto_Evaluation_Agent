@@ -1,6 +1,14 @@
 import cv2
 import numpy as np
 import pytesseract
+import os
+
+# Explicitly mapping Tesseract for Windows users
+if os.name == 'nt' and os.path.exists(r'C:\Program Files\Tesseract-OCR\tesseract.exe'):
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+elif os.name == 'nt' and os.path.exists(r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'):
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
+
 from PIL import Image
 from pdf2image import convert_from_path
 import os

@@ -9,8 +9,6 @@ PyPDF2
 pdf2image
 pytesseract
 requests
-litellm
-crewai
 fpdf2
 plotly
 pandas
