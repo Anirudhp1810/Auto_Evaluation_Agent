@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Home, FileText, Upload, Settings, Users, LogOut, CheckCircle, Clock, BookOpen, BarChart3, Brain, ClipboardList, BookMarked, Trash2 } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Home, FileText, Upload, Settings, Users, LogOut, CheckCircle, Clock, BookOpen, BarChart3, Brain, ClipboardList, BookMarked, Trash2, Download, GitCompare } from 'lucide-react';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar, CartesianGrid } from 'recharts';
 import './index.css';
@@ -24,6 +24,7 @@ function App() {
         {activeTab === 'AI Evaluation' && <UploadZone evaluatingIds={evaluatingIds} setEvaluatingIds={setEvaluatingIds} timers={timers} setTimers={setTimers} showUpload={false} />}
         {activeTab === 'Results' && <ResultsView />}
         {activeTab === 'Analytics' && <AnalyticsView />}
+        {activeTab === 'Model Comparison' && <ModelComparisonView />}
         {activeTab === 'AI Insights' && <AiInsightsView />}
         {activeTab === 'Settings' && <SettingsView />}
         {['Exam Management', 'Question Bank', 'Students', 'Courses'].includes(activeTab) && (
@@ -67,6 +68,7 @@ function Sidebar({ activeTab, setActiveTab, user, onLogout }) {
       title: 'INSIGHTS',
       items: [
         { id: 'Analytics', icon: BarChart3 },
+        { id: 'Model Comparison', icon: GitCompare },
         { id: 'AI Insights', icon: Brain },
         { id: 'Settings', icon: Settings }
       ]
@@ -163,107 +165,149 @@ function Login({ onLogin }) {
 }
 
 function Dashboard() {
-  const [stats, setStats] = useState({ total_students: 0, total_courses: 0, evals_pending: 0, evals_done: 0, failed_students: 0 });
-  const [trends, setTrends] = useState([]);
-  const [grades, setGrades] = useState([]);
+  const [stats, setStats] = useState(null);
   const [top, setTop] = useState([]);
 
   useEffect(() => {
     axios.get(`${API_BASE}/dashboard/stats`).then(r => setStats(r.data));
-    axios.get(`${API_BASE}/analytics/trends`).then(r => setTrends(r.data));
-    axios.get(`${API_BASE}/analytics/grades`).then(r => setGrades(r.data));
     axios.get(`${API_BASE}/analytics/top`).then(r => setTop(r.data));
   }, []);
 
-  const cards = [
-    { title: 'Total Students', value: stats.total_students, color: '#3b82f6' },
-    { title: 'Total Courses', value: stats.total_courses, color: '#8b5cf6' },
-    { title: 'Evaluated', value: stats.evals_done, color: '#10b981' },
-    { title: 'Evals Remaining', value: stats.evals_pending, color: '#f59e0b' },
-    { title: 'Failed Students', value: stats.failed_students, color: '#ef4444' },
-  ];
+  const s = stats || {};
+  const avgScore = s.avg_score ?? 0;
+  const passRate = s.pass_rate ?? 0;
 
   return (
     <div className="animate-fade-in">
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '15px', marginBottom: '30px' }}>
-        {cards.map(c => (
-          <div key={c.title} className="glass-card">
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '1px' }}>
-              {c.title}
+      {/* Stat Cards Row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '14px', marginBottom: '24px' }}>
+        {[
+          { label: 'Students', val: s.total_students ?? 0, color: '#3b82f6' },
+          { label: 'Evaluated', val: s.evals_done ?? 0, color: '#10b981' },
+          { label: 'Pending', val: s.evals_pending ?? 0, color: '#f59e0b' },
+          { label: 'Avg Score', val: `${avgScore}%`, color: '#8b5cf6' },
+          { label: 'Pass Rate', val: `${passRate}%`, color: passRate >= 60 ? '#10b981' : '#ef4444' },
+        ].map(c => (
+          <div key={c.label} className="glass-card">
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '1.2px', marginBottom: '10px' }}>
+              {c.label}
             </div>
-            <div style={{ fontSize: '30px', fontWeight: 800, marginTop: '8px', color: c.color }}>
-              {c.value}
+            <div style={{ fontSize: '26px', fontWeight: 800, color: c.color, lineHeight: 1 }}>
+              {c.val}
             </div>
           </div>
         ))}
       </div>
 
-      <div style={{ display: 'flex', gap: '20px' }}>
-         <div className="glass-panel" style={{ flex: 1.5, padding: '24px' }}>
-            <h4 style={{ marginBottom: '20px', color: 'white', fontWeight: 600 }}>Student Performance Trend</h4>
-            <div style={{ height: '300px', width: '100%' }}>
-               {trends.length > 0 ? (
-                 <ResponsiveContainer width="100%" height="100%">
-                   <LineChart data={trends}>
-                     <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} tickLine={false} />
-                     <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-                     <Tooltip contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: 'white' }} />
-                     <Line type="monotone" dataKey="avg_score" stroke="#3b82f6" strokeWidth={3} dot={{ r: 6, fill: '#8b5cf6', strokeWidth: 0 }} />
-                   </LineChart>
-                 </ResponsiveContainer>
-               ) : <div style={{ color: 'var(--text-muted)' }}>📊 No evaluation trend data yet.</div>}
+      {/* Main Content Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '20px' }}>
+        
+        {/* Recent Evaluations */}
+        <div className="glass-panel" style={{ padding: '22px' }}>
+          <h4 style={{ marginBottom: '16px', color: 'white', fontWeight: 600, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Clock size={15} color="#60a5fa"/> Recent Evaluations
+          </h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {(s.recent?.length > 0) ? s.recent.map((r, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.student_name || 'Unknown'}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {[r.course_name, r.exam_type, r.division ? `Div ${r.division}` : null].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>{r.total_score}/{r.max_marks}</span>
+                  <span className="badge" style={{ 
+                    background: r.grade === 'F' ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)', 
+                    color: r.grade === 'F' ? '#ef4444' : '#10b981',
+                    padding: '3px 8px', fontSize: '11px'
+                  }}>{r.grade}</span>
+                </div>
+              </div>
+            )) : (
+              <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '50px 20px', fontSize: '13px' }}>
+                <FileText size={32} style={{ opacity: 0.2, margin: '0 auto 12px auto', display: 'block' }}/>
+                No evaluations yet
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          
+          {/* Course Performance */}
+          <div className="glass-panel" style={{ padding: '22px' }}>
+            <h4 style={{ marginBottom: '16px', color: 'white', fontWeight: 600, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <BookOpen size={15} color="#8b5cf6"/> Course Performance
+            </h4>
+            {(s.course_stats?.length > 0) ? s.course_stats.map((cs, i) => (
+              <div key={i} style={{ marginBottom: i < s.course_stats.length - 1 ? '14px' : 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px', alignItems: 'baseline' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600 }}>{cs.name}</span>
+                  <span style={{ fontSize: '12px', color: cs.avg_pct >= 60 ? '#10b981' : '#f59e0b', fontWeight: 600 }}>{cs.avg_pct}% · {cs.count} evals</span>
+                </div>
+                <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.min(cs.avg_pct, 100)}%`, height: '100%', background: cs.avg_pct >= 70 ? 'linear-gradient(90deg, #10b981, #34d399)' : cs.avg_pct >= 40 ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #ef4444, #f87171)', borderRadius: '3px', transition: 'width 0.8s ease' }} />
+                </div>
+              </div>
+            )) : (
+              <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '24px 0', fontSize: '13px' }}>
+                <BarChart3 size={28} style={{ opacity: 0.2, margin: '0 auto 10px auto', display: 'block' }}/>
+                No course data yet
+              </div>
+            )}
+          </div>
+
+          {/* Top Performers */}
+          <div className="glass-panel" style={{ padding: '22px' }}>
+            <h4 style={{ marginBottom: '16px', color: 'white', fontWeight: 600, fontSize: '14px' }}>
+              🏆 Top Performers
+            </h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {top.length > 0 ? top.map((t, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '18px', lineHeight: 1 }}>{i===0?'🥇':i===1?'🥈':'🥉'}</span>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: '13px' }}>{t.name}</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{t.exam_type || 'ISA-1'} · Div {t.division || 'A'}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <span className="badge badge-success" style={{ padding: '3px 8px', fontSize: '11px' }}>{t.grade}</span>
+                    <span style={{ color: 'var(--accent)', fontWeight: 700, fontSize: '14px' }}>{Number(t.pct).toFixed(1)}%</span>
+                  </div>
+                </div>
+              )) : (
+                <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '24px 0', fontSize: '13px' }}>
+                  <Users size={28} style={{ opacity: 0.2, margin: '0 auto 10px auto', display: 'block' }}/>
+                  No ranked students yet
+                </div>
+              )}
             </div>
-         </div>
-         
-         <div className="glass-panel" style={{ flex: 1, padding: '24px' }}>
-            <h4 style={{ marginBottom: '20px', color: 'white', fontWeight: 600 }}>Grade Distribution</h4>
-            <div style={{ height: '300px', width: '100%' }}>
-               {grades.length > 0 ? (
-                 <ResponsiveContainer width="100%" height="100%">
-                   <PieChart>
-                     <Pie data={grades} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
-                       {grades.map((entry, index) => (
-                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                       ))}
-                     </Pie>
-                     <Tooltip contentStyle={{ background: '#1e293b', border: 'none', borderRadius: '8px', color: 'white' }} />
-                     <Legend verticalAlign="bottom" height={36}/>
-                   </PieChart>
-                 </ResponsiveContainer>
-               ) : <div style={{ color: 'var(--text-muted)' }}>🥧 No grades awarded yet.</div>}
-            </div>
-         </div>
-         
-         <div className="glass-panel" style={{ flex: 1, padding: '24px' }}>
-            <h4 style={{ marginBottom: '20px', color: 'white', fontWeight: 600 }}>🏆 Top Performers</h4>
-            <div>
-               {top.length > 0 ? top.map((t, i) => (
-                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '12px 16px', borderRadius: '8px', marginBottom: '8px', border: '1px solid var(--glass-border)' }}>
-                   <div style={{ fontWeight: 600 }}>
-                     {i===0?'🥇':i===1?'🥈':'🥉'} {t.name}
-                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', marginLeft: '25px' }}>{t.exam_type || 'ISA-1'} • Div {t.division || 'A'}</div>
-                   </div>
-                   <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                     <span className="badge badge-success">{t.grade}</span>
-                     <span style={{ color: 'var(--accent)', fontWeight: 700 }}>{Number(t.pct).toFixed(1)}%</span>
-                   </div>
-                 </div>
-               )) : <div style={{ color: 'var(--text-muted)' }}>No ranked students yet.</div>}
-            </div>
-         </div>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
 function UploadZone({ evaluatingIds, setEvaluatingIds, timers, setTimers, showUpload = true }) {
-  const [rubric, setRubric] = useState('{\n  "questions": [\n    {"q_no": "1", "max_marks": 10}\n  ]\n}');
+  const [rubric, setRubric] = useState(JSON.stringify({
+    "questions": [
+      {"q_no": "1", "max_marks": 10, "topic": "e.g. Neural Networks", "expected_keywords": "backpropagation, gradient descent"},
+      {"q_no": "2", "max_marks": 10, "topic": "", "expected_keywords": ""}
+    ]
+  }, null, 2));
   const [file, setFile] = useState(null);
   const [filePreview, setFilePreview] = useState(null);
   const [student, setStudent] = useState({ name: '', id: '', roll: '' });
   const [division, setDivision] = useState('A');
   const [examType, setExamType] = useState('ISA-1');
+  const [courseName, setCourseName] = useState('GenAI');
   const [marks, setMarks] = useState({ total: 100, pass: 40 });
   const [exams, setExams] = useState([]);
   const [examId, setExamId] = useState(1);
@@ -310,6 +354,7 @@ function UploadZone({ evaluatingIds, setEvaluatingIds, timers, setTimers, showUp
     formData.append('roll_no', student.roll);
     formData.append('division', division);
     formData.append('exam_type', examType);
+    formData.append('course_name', courseName);
     formData.append('file', file);
 
     try {
@@ -391,10 +436,17 @@ function UploadZone({ evaluatingIds, setEvaluatingIds, timers, setTimers, showUp
                   {['ISA-1', 'ISA-2', 'ESA'].map(t => <option key={t} value={t} style={{color: 'black'}}>{t}</option>)}
                 </select>
               </div>
+              <div className="input-container" style={{ flex: 1, marginBottom: 0 }}>
+                <label>Course</label>
+                <select value={courseName} onChange={e=>setCourseName(e.target.value)} style={{ padding: '12px', borderRadius: '8px', width: '100%' }}>
+                  {['GenAI', 'Cloud Computing'].map(c => <option key={c} value={c} style={{color: 'black'}}>{c}</option>)}
+                </select>
+              </div>
             </div>
             <div className="input-container" style={{ marginBottom: 0 }}>
-              <label>Rubrics & Grading (JSON)</label>
-              <textarea rows={3} value={rubric} onChange={e=>setRubric(e.target.value)} style={{ padding: '12px', borderRadius: '8px', fontFamily: 'monospace', fontSize: '13px' }} />
+              <label>Rubric & Answer Key (JSON)</label>
+              <textarea rows={8} value={rubric} onChange={e=>setRubric(e.target.value)} style={{ padding: '12px', borderRadius: '8px', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.5' }} />
+              <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>💡 Fill in <strong>topic</strong> and <strong>expected_keywords</strong> for each question to improve AI grading accuracy.</p>
             </div>
           </div>
           
@@ -483,6 +535,7 @@ function UploadZone({ evaluatingIds, setEvaluatingIds, timers, setTimers, showUp
                         {p.file_name} 
                         <span className="badge badge-pending" style={{background: 'rgba(59,130,246,0.2)', color: '#60a5fa'}}>{p.exam_type || 'Exam'}</span>
                         <span className="badge badge-success" style={{background: 'rgba(16,185,129,0.2)', color: '#10b981'}}>Div {p.division || 'A'}</span>
+                        {p.course_name && <span className="badge" style={{background: 'rgba(139,92,246,0.2)', color: '#a78bfa'}}>{p.course_name}</span>}
                       </div>
                       <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>{p.exam_name} • {p.student_name} ({p.student_id})</div>
                     </div>
@@ -553,6 +606,7 @@ function ResultsView() {
                 <th style={{ padding: '15px' }}>Type/Div</th>
                 <th style={{ padding: '15px' }}>Score</th>
                 <th style={{ padding: '15px' }}>Grade</th>
+                <th style={{ padding: '15px' }}>Model</th>
                 <th style={{ padding: '15px' }}>Actions</th>
               </tr>
             </thead>
@@ -563,16 +617,22 @@ function ResultsView() {
                      <td style={{ padding: '15px', color: 'var(--text-muted)' }}>{r.exam_name || 'N/A'}</td>
                      <td style={{ padding: '15px' }}>
                         <span className="badge badge-pending" style={{background: 'rgba(59,130,246,0.1)', color: '#60a5fa', marginRight: '5px', padding: '4px 8px'}}>{r.exam_type || 'ISA-1'}</span>
-                        <span className="badge badge-success" style={{background: 'rgba(16,185,129,0.1)', color: '#10b981', padding: '4px 8px'}}>Div {r.division || 'A'}</span>
+                        <span className="badge badge-success" style={{background: 'rgba(16,185,129,0.1)', color: '#10b981', padding: '4px 8px', marginRight: '5px'}}>Div {r.division || 'A'}</span>
+                        {r.course_name && <span className="badge" style={{background: 'rgba(139,92,246,0.1)', color: '#a78bfa', padding: '4px 8px'}}>{r.course_name}</span>}
                      </td>
                      <td style={{ padding: '15px', fontWeight: 700, color: 'var(--accent)' }}>{r.total_marks} / {r.max_marks}</td>
                      <td style={{ padding: '15px' }}><div className="badge badge-success">{r.grade}</div></td>
+                     <td style={{ padding: '15px' }}>
+                        <span className="badge" style={{ background: r.model_used?.includes('Gemini') ? 'rgba(59,130,246,0.15)' : 'rgba(245,158,11,0.15)', color: r.model_used?.includes('Gemini') ? '#60a5fa' : '#fbbf24', padding: '4px 10px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <Brain size={12}/> {r.model_used || 'unknown'}
+                        </span>
+                     </td>
                      <td style={{ padding: '15px' }}>
                         <button className="btn" onClick={() => handlePreview(r.pdf_path, r.file_name)}>Preview Report</button>
                      </td>
                   </tr>
                ))}
-               {results.length === 0 && <tr><td colSpan={5} style={{textAlign:'center', padding:'30px'}}>No results yet.</td></tr>}
+               {results.length === 0 && <tr><td colSpan={7} style={{textAlign:'center', padding:'30px'}}>No results yet.</td></tr>}
             </tbody>
          </table>
       </div>
@@ -618,15 +678,17 @@ function AnalyticsView() {
   const [grades, setGrades] = useState([]);
   const [filterDiv, setFilterDiv] = useState('All');
   const [filterExam, setFilterExam] = useState('All');
+  const [filterCourse, setFilterCourse] = useState('All');
 
   useEffect(() => {
     const params = new URLSearchParams();
     if (filterDiv !== 'All') params.append('division', filterDiv);
     if (filterExam !== 'All') params.append('exam_type', filterExam);
+    if (filterCourse !== 'All') params.append('course_name', filterCourse);
     
     axios.get(`${API_BASE}/analytics/detailed?${params.toString()}`).then(r => setDetailed(r.data));
     axios.get(`${API_BASE}/analytics/grades?${params.toString()}`).then(r => setGrades(r.data));
-  }, [filterDiv, filterExam]);
+  }, [filterDiv, filterExam, filterCourse]);
 
   if (!detailed) return <div style={{padding: '40px', color: 'var(--text-muted)'}}>Loading analytics...</div>;
 
@@ -644,6 +706,12 @@ function AnalyticsView() {
             <select value={filterExam} onChange={e=>setFilterExam(e.target.value)} style={{ padding: '10px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)' }}>
               <option value="All" style={{color: 'black'}}>All Exams</option>
               {['ISA-1', 'ISA-2', 'ESA'].map(t => <option key={t} value={t} style={{color: 'black'}}>{t}</option>)}
+            </select>
+          </div>
+          <div className="input-container" style={{ marginBottom: 0, minWidth: '150px' }}>
+            <select value={filterCourse} onChange={e=>setFilterCourse(e.target.value)} style={{ padding: '10px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)' }}>
+              <option value="All" style={{color: 'black'}}>All Courses</option>
+              {['GenAI', 'Cloud Computing'].map(c => <option key={c} value={c} style={{color: 'black'}}>{c}</option>)}
             </select>
           </div>
         </div>
@@ -860,11 +928,282 @@ function SettingsView() {
   );
 }
 
+// Utility: Download a chart container as PNG
+function downloadChartAsPng(containerId, filename) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  
+  const svgData = new XMLSerializer().serializeToString(svg);
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const img = new Image();
+  
+  const svgRect = svg.getBoundingClientRect();
+  canvas.width = svgRect.width * 2;
+  canvas.height = svgRect.height * 2;
+  ctx.scale(2, 2);
+  
+  img.onload = () => {
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    const link = document.createElement('a');
+    link.download = `${filename}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  };
+  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+}
+
+const MODEL_COLORS = { gemini: '#60a5fa', ollama: '#fbbf24' };
+function getModelColor(name) {
+  if (!name) return '#94a3b8';
+  const n = name.toLowerCase();
+  if (n.includes('gemini')) return MODEL_COLORS.gemini;
+  return MODEL_COLORS.ollama;
+}
+
+function ModelComparisonView() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    setLoading(true);
+    axios.get(`${API_BASE}/analytics/model_comparison`).then(r => {
+      setData(r.data);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="animate-fade-in" style={{ textAlign: 'center', padding: '80px', color: 'var(--text-muted)' }}>Loading comparison data...</div>;
+  if (!data || data.model_stats.length === 0) return (
+    <div className="animate-fade-in" style={{ textAlign: 'center', padding: '80px', color: 'var(--text-muted)' }}>
+      <GitCompare size={48} style={{ opacity: 0.2, marginBottom: '16px' }}/>
+      <h3 style={{ color: 'white', marginBottom: '8px' }}>No Comparison Data Yet</h3>
+      <p>Evaluate papers with both Gemini and Ollama to see comparison results here.</p>
+    </div>
+  );
+
+  const models = data.model_stats.map(m => m.model_used);
+  
+  // --- Chart 1: Overall Avg Score per model ---
+  const overallData = data.model_stats.map(m => ({ name: m.model_used, 'Avg Score %': m.avg_pct, Papers: m.count }));
+  
+  // --- Chart 2: Grade distribution grouped ---
+  const allGrades = ['A+', 'A', 'B', 'C', 'F'];
+  const gradeChartData = allGrades.map(g => {
+    const row = { grade: g };
+    models.forEach(m => {
+      const match = data.grade_dist.find(d => d.model_used === m && d.grade === g);
+      row[m] = match ? match.count : 0;
+    });
+    return row;
+  });
+  
+  // --- Chart 3: Course-wise comparison ---
+  const courseNames = [...new Set(data.course_model.map(c => c.course_name))];
+  const courseChartData = courseNames.map(cn => {
+    const row = { course: cn };
+    models.forEach(m => {
+      const match = data.course_model.find(d => d.course_name === cn && d.model_used === m);
+      row[m] = match ? match.avg_pct : 0;
+    });
+    return row;
+  });
+  
+  // --- Chart 4: Question-level ---
+  const qNos = [...new Set(data.question_data.map(q => q.q_no))].sort();
+  const qChartData = qNos.map(qn => {
+    const row = { question: qn };
+    models.forEach(m => {
+      const match = data.question_data.find(d => d.q_no === qn && d.model === m);
+      row[m] = match ? match.avg_marks : 0;
+    });
+    return row;
+  });
+
+  const tooltipStyle = { background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: 'white', fontSize: '12px' };
+
+  const ChartHeader = ({ title, chartId, filename }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+      <h4 style={{ color: 'white', fontWeight: 600, fontSize: '14px', margin: 0 }}>{title}</h4>
+      <button onClick={() => downloadChartAsPng(chartId, filename)} className="btn" style={{ padding: '5px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+        <Download size={12}/> PNG
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="animate-fade-in">
+      
+      {/* Summary Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${models.length}, 1fr)`, gap: '14px', marginBottom: '24px' }}>
+        {data.model_stats.map(m => (
+          <div key={m.model_used} className="glass-card" style={{ borderTop: `3px solid ${getModelColor(m.model_used)}` }}>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '1px', marginBottom: '10px' }}>
+              {m.model_used}
+            </div>
+            <div style={{ display: 'flex', gap: '20px', alignItems: 'baseline' }}>
+              <div>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: getModelColor(m.model_used), lineHeight: 1 }}>{m.avg_pct}%</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>Avg Score</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: 'white', lineHeight: 1 }}>{m.count}</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>Papers</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Charts Row 1 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+        
+        {/* Overall Avg Score */}
+        <div className="glass-panel" style={{ padding: '22px' }}>
+          <ChartHeader title="Average Score by Model" chartId="chart-overall" filename="model_avg_score" />
+          <div id="chart-overall" style={{ height: '280px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={overallData} barSize={50}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Bar dataKey="Avg Score %" radius={[6, 6, 0, 0]}>
+                  {overallData.map((entry, i) => <Cell key={i} fill={getModelColor(entry.name)} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        
+        {/* Grade Distribution */}
+        <div className="glass-panel" style={{ padding: '22px' }}>
+          <ChartHeader title="Grade Distribution by Model" chartId="chart-grades" filename="model_grade_distribution" />
+          <div id="chart-grades" style={{ height: '280px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={gradeChartData} barGap={4}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="grade" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+                {models.map(m => <Bar key={m} dataKey={m} fill={getModelColor(m)} radius={[4, 4, 0, 0]} barSize={30} />)}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* Charts Row 2 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+        
+        {/* Course-wise */}
+        {courseChartData.length > 0 && (
+          <div className="glass-panel" style={{ padding: '22px' }}>
+            <ChartHeader title="Course-wise Avg Score (%)" chartId="chart-course" filename="model_course_comparison" />
+            <div id="chart-course" style={{ height: '280px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={courseChartData} barGap={4}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="course" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                  <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} />
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Legend wrapperStyle={{ fontSize: '11px' }} />
+                  {models.map(m => <Bar key={m} dataKey={m} fill={getModelColor(m)} radius={[4, 4, 0, 0]} barSize={40} />)}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+        
+        {/* Question-level */}
+        {qChartData.length > 0 && (
+          <div className="glass-panel" style={{ padding: '22px' }}>
+            <ChartHeader title="Question-wise Avg Marks" chartId="chart-question" filename="model_question_comparison" />
+            <div id="chart-question" style={{ height: '280px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={qChartData} barGap={4}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="question" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                  <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Legend wrapperStyle={{ fontSize: '11px' }} />
+                  {models.map(m => <Bar key={m} dataKey={m} fill={getModelColor(m)} radius={[4, 4, 0, 0]} barSize={30} />)}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Student-level Comparison Table */}
+      {data.student_scores.length > 0 && (
+        <div className="glass-panel" style={{ padding: '22px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <h4 style={{ color: 'white', fontWeight: 600, fontSize: '14px', margin: 0 }}>Per-Student Score Comparison</h4>
+            <button onClick={() => {
+              // CSV export
+              const rows = [['Student', 'Course', 'Exam', 'Model', 'Score', 'Max', 'Percentage', 'Grade']];
+              data.student_scores.forEach(s => {
+                const pct = s.max_marks > 0 ? ((s.total_score / s.max_marks) * 100).toFixed(1) : '0';
+                rows.push([s.student_name, s.course_name, s.exam_type, s.model_used, s.total_score, s.max_marks, pct, s.grade]);
+              });
+              const csv = rows.map(r => r.join(',')).join('\n');
+              const blob = new Blob([csv], { type: 'text/csv' });
+              const link = document.createElement('a');
+              link.download = 'model_comparison_data.csv';
+              link.href = URL.createObjectURL(blob);
+              link.click();
+            }} className="btn" style={{ padding: '5px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <Download size={12}/> Export CSV
+            </button>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--glass-border)', textAlign: 'left', color: 'var(--text-muted)' }}>
+                <th style={{ padding: '10px 12px', fontSize: '11px' }}>Student</th>
+                <th style={{ padding: '10px 12px', fontSize: '11px' }}>Course</th>
+                <th style={{ padding: '10px 12px', fontSize: '11px' }}>Exam</th>
+                <th style={{ padding: '10px 12px', fontSize: '11px' }}>Model</th>
+                <th style={{ padding: '10px 12px', fontSize: '11px' }}>Score</th>
+                <th style={{ padding: '10px 12px', fontSize: '11px' }}>Grade</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.student_scores.map((s, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                  <td style={{ padding: '10px 12px', fontSize: '13px', fontWeight: 500 }}>{s.student_name}</td>
+                  <td style={{ padding: '10px 12px', fontSize: '12px', color: 'var(--text-muted)' }}>{s.course_name}</td>
+                  <td style={{ padding: '10px 12px', fontSize: '12px', color: 'var(--text-muted)' }}>{s.exam_type}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <span className="badge" style={{ background: getModelColor(s.model_used) + '20', color: getModelColor(s.model_used), padding: '3px 8px', fontSize: '11px' }}>
+                      {s.model_used}
+                    </span>
+                  </td>
+                  <td style={{ padding: '10px 12px', fontSize: '13px', fontWeight: 600 }}>{s.total_score}/{s.max_marks}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <span className="badge" style={{ background: s.grade === 'F' ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)', color: s.grade === 'F' ? '#ef4444' : '#10b981', padding: '3px 8px', fontSize: '11px' }}>{s.grade}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AiInsightsView() {
   const [insights, setInsights] = useState(null);
   const [loading, setLoading] = useState(false);
   const [filterDiv, setFilterDiv] = useState('All');
   const [filterExam, setFilterExam] = useState('All');
+  const [filterCourse, setFilterCourse] = useState('All');
 
   const generateInsights = async () => {
     setLoading(true);
@@ -873,6 +1212,7 @@ function AiInsightsView() {
       const params = new URLSearchParams();
       if (filterDiv !== 'All') params.append('division', filterDiv);
       if (filterExam !== 'All') params.append('exam_type', filterExam);
+      if (filterCourse !== 'All') params.append('course_name', filterCourse);
       
       const res = await axios.get(`${API_BASE}/ai_insights/generate?${params.toString()}`);
       setInsights(res.data);
@@ -898,6 +1238,12 @@ function AiInsightsView() {
             <select value={filterExam} onChange={e=>setFilterExam(e.target.value)} style={{ padding: '10px 15px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}>
               <option value="All" style={{color: 'black'}}>All Exams</option>
               {['ISA-1', 'ISA-2', 'ESA'].map(t => <option key={t} value={t} style={{color: 'black'}}>{t}</option>)}
+            </select>
+          </div>
+          <div className="input-container" style={{ marginBottom: 0, minWidth: '130px' }}>
+            <select value={filterCourse} onChange={e=>setFilterCourse(e.target.value)} style={{ padding: '10px 15px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}>
+              <option value="All" style={{color: 'black'}}>All Courses</option>
+              {['GenAI', 'Cloud Computing'].map(c => <option key={c} value={c} style={{color: 'black'}}>{c}</option>)}
             </select>
           </div>
           <button 

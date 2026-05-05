@@ -94,17 +94,51 @@ async def get_dashboard_stats():
             SELECT student_id FROM submissions WHERE student_id IS NOT NULL AND student_id != ''
         )
     """, fetch=True, fetch_all=False)
-    total_courses = execute_query("SELECT COUNT(*) as c FROM courses", fetch=True, fetch_all=False)
     evals_pending = execute_query("SELECT COUNT(*) as c FROM submissions WHERE status='pending'", fetch=True, fetch_all=False)
     evals_done = execute_query("SELECT COUNT(*) as c FROM evaluations WHERE status='evaluated'", fetch=True, fetch_all=False)
     failed_students = execute_query("SELECT COUNT(*) as c FROM evaluations WHERE grade='F'", fetch=True, fetch_all=False)
+    
+    # Avg score percentage
+    avg_score = execute_query("""
+        SELECT AVG(ev.total_score * 100.0 / CASE WHEN su.total_marks=0 THEN 100 ELSE su.total_marks END) as avg
+        FROM evaluations ev JOIN submissions su ON ev.submission_id = su.id
+        WHERE ev.status='evaluated'
+    """, fetch=True, fetch_all=False)
+    
+    # Pass rate
+    done_count = evals_done['c'] if evals_done else 0
+    fail_count = failed_students['c'] if failed_students else 0
+    pass_rate = round(((done_count - fail_count) / done_count * 100), 1) if done_count > 0 else 0
+    
+    # Per-course counts
+    course_stats = execute_query("""
+        SELECT su.course_name as name, COUNT(*) as count,
+               AVG(ev.total_score * 100.0 / CASE WHEN su.total_marks=0 THEN 100 ELSE su.total_marks END) as avg_pct
+        FROM evaluations ev JOIN submissions su ON ev.submission_id = su.id
+        WHERE ev.status='evaluated' AND su.course_name IS NOT NULL AND su.course_name != ''
+        GROUP BY su.course_name
+    """, fetch=True) or []
+    for cs in course_stats:
+        cs['avg_pct'] = round(cs['avg_pct'], 1) if cs['avg_pct'] else 0
+    
+    # Recent 5 evaluations
+    recent = execute_query("""
+        SELECT su.student_name, ev.grade, ev.total_score, su.total_marks as max_marks,
+               su.course_name, su.exam_type, su.division, ev.model_used, ev.created_at
+        FROM evaluations ev JOIN submissions su ON ev.submission_id = su.id
+        WHERE ev.status='evaluated'
+        ORDER BY ev.created_at DESC LIMIT 5
+    """, fetch=True) or []
 
     return {
         "total_students": total_students['c'] if total_students else 0,
-        "total_courses": total_courses['c'] if total_courses else 0,
         "evals_pending": evals_pending['c'] if evals_pending else 0,
-        "evals_done": evals_done['c'] if evals_done else 0,
-        "failed_students": failed_students['c'] if failed_students else 0
+        "evals_done": done_count,
+        "failed_students": fail_count,
+        "avg_score": round(avg_score['avg'], 1) if avg_score and avg_score['avg'] else 0,
+        "pass_rate": pass_rate,
+        "course_stats": course_stats,
+        "recent": recent
     }
 
 @app.get("/api/exams")
@@ -123,6 +157,7 @@ async def upload_evaluation(
     roll_no: str = Form(""),
     division: str = Form("A"),
     exam_type: str = Form("ISA-1"),
+    course_name: str = Form(""),
     file: UploadFile = File(...)
 ):
     uploads_dir = os.path.join(os.path.dirname(__file__), 'uploads')
@@ -139,9 +174,9 @@ async def upload_evaluation(
 
     execute_query(
         """INSERT INTO submissions 
-        (file_name, file_path, exam_id, status, ocr_text, rubrics_json, total_marks, passing_marks, student_name, student_id, roll_no, division, exam_type, created_at) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-        (file.filename, file_path, exam_id, 'pending', ext_text, rubrics_json, total_marks, pass_marks, student_name, student_id, roll_no, division, exam_type)
+        (file_name, file_path, exam_id, status, ocr_text, rubrics_json, total_marks, passing_marks, student_name, student_id, roll_no, division, exam_type, course_name, created_at) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+        (file.filename, file_path, exam_id, 'pending', ext_text, rubrics_json, total_marks, pass_marks, student_name, student_id, roll_no, division, exam_type, course_name)
     )
     return {"message": "Uploaded successfully"}
 
@@ -150,7 +185,7 @@ async def get_pending_evaluations():
     query_all = """
         SELECT su.id, su.file_path, su.file_name, e.name as exam_name, su.student_name, su.student_id, su.roll_no, 
                su.created_at, su.status, su.ocr_text, su.rubrics_json, 
-               su.total_marks, su.passing_marks, su.division, su.exam_type
+               su.total_marks, su.passing_marks, su.division, su.exam_type, su.course_name
         FROM submissions su
         LEFT JOIN exams e ON su.exam_id = e.id
         WHERE su.status = 'pending'
@@ -193,7 +228,7 @@ async def get_results():
     SELECT DISTINCT
         su.id as sub_id, su.student_id, su.student_name, su.roll_no, 
         ev.total_score as total_marks, ev.grade, ev.feedback, ev.breakdown_json, ev.status, su.file_name, ev.pdf_path,
-        e.name as exam_name, su.total_marks as max_marks, c.name as course_name, su.division, su.exam_type
+        e.name as exam_name, su.total_marks as max_marks, su.course_name, su.division, su.exam_type, ev.model_used
     FROM submissions su
     JOIN evaluations ev ON ev.submission_id = su.id
     LEFT JOIN exams e ON su.exam_id = e.id
@@ -223,7 +258,7 @@ async def get_trends():
     return res or []
 
 @app.get("/api/analytics/grades")
-async def get_grades(division: Optional[str] = None, exam_type: Optional[str] = None):
+async def get_grades(division: Optional[str] = None, exam_type: Optional[str] = None, course_name: Optional[str] = None):
     where_clause = "ev.status='evaluated' AND ev.grade IS NOT NULL"
     params = []
     if division and division != 'All':
@@ -232,13 +267,16 @@ async def get_grades(division: Optional[str] = None, exam_type: Optional[str] = 
     if exam_type and exam_type != 'All':
         where_clause += " AND su.exam_type = ?"
         params.append(exam_type)
+    if course_name and course_name != 'All':
+        where_clause += " AND su.course_name = ?"
+        params.append(course_name)
 
     query = f"SELECT ev.grade as name, COUNT(*) as value FROM evaluations ev JOIN submissions su ON ev.submission_id = su.id WHERE {where_clause} GROUP BY ev.grade"
     res = execute_query(query, tuple(params), fetch=True)
     return res or []
 
 @app.get("/api/analytics/detailed")
-async def get_detailed_analytics(division: Optional[str] = None, exam_type: Optional[str] = None):
+async def get_detailed_analytics(division: Optional[str] = None, exam_type: Optional[str] = None, course_name: Optional[str] = None):
     where_clause = "ev.status = 'evaluated'"
     params = []
     if division and division != 'All':
@@ -247,6 +285,9 @@ async def get_detailed_analytics(division: Optional[str] = None, exam_type: Opti
     if exam_type and exam_type != 'All':
         where_clause += " AND su.exam_type = ?"
         params.append(exam_type)
+    if course_name and course_name != 'All':
+        where_clause += " AND su.course_name = ?"
+        params.append(course_name)
 
     division_query = f"""
         SELECT su.division as name, AVG(ev.total_score * 100.0 / CASE WHEN su.total_marks=0 THEN 100 ELSE su.total_marks END) as avg_score
@@ -350,6 +391,89 @@ async def clear_history():
     execute_query("DELETE FROM submissions")
     return {"message": "History cleared"}
 
+@app.get("/api/analytics/model_comparison")
+async def get_model_comparison():
+    """Returns aggregated data for comparing AI model performance."""
+    
+    # Per-model aggregate stats
+    model_stats = execute_query("""
+        SELECT ev.model_used, COUNT(*) as count,
+               ROUND(AVG(ev.total_score * 100.0 / CASE WHEN su.total_marks=0 THEN 100 ELSE su.total_marks END), 1) as avg_pct,
+               ROUND(AVG(ev.total_score), 1) as avg_score
+        FROM evaluations ev JOIN submissions su ON ev.submission_id = su.id
+        WHERE ev.status='evaluated' AND ev.model_used IS NOT NULL AND ev.model_used != 'unknown'
+        GROUP BY ev.model_used
+    """, fetch=True) or []
+    
+    # Grade distribution per model
+    grade_dist = execute_query("""
+        SELECT ev.model_used, ev.grade, COUNT(*) as count
+        FROM evaluations ev
+        WHERE ev.status='evaluated' AND ev.model_used IS NOT NULL AND ev.model_used != 'unknown'
+        GROUP BY ev.model_used, ev.grade
+    """, fetch=True) or []
+    
+    # Per-course per-model
+    course_model = execute_query("""
+        SELECT su.course_name, ev.model_used,
+               ROUND(AVG(ev.total_score * 100.0 / CASE WHEN su.total_marks=0 THEN 100 ELSE su.total_marks END), 1) as avg_pct,
+               COUNT(*) as count
+        FROM evaluations ev JOIN submissions su ON ev.submission_id = su.id
+        WHERE ev.status='evaluated' AND su.course_name IS NOT NULL AND su.course_name != '' AND ev.model_used IS NOT NULL AND ev.model_used != 'unknown'
+        GROUP BY su.course_name, ev.model_used
+    """, fetch=True) or []
+    
+    # Per-student scores for direct comparison table
+    student_scores = execute_query("""
+        SELECT su.student_name, su.course_name, su.exam_type, ev.model_used, 
+               ev.total_score, su.total_marks as max_marks, ev.grade
+        FROM evaluations ev JOIN submissions su ON ev.submission_id = su.id
+        WHERE ev.status='evaluated' AND ev.model_used IS NOT NULL AND ev.model_used != 'unknown'
+        ORDER BY su.student_name, su.course_name
+    """, fetch=True) or []
+    
+    # Question-level avg per model
+    q_raw = execute_query("""
+        SELECT ev.model_used, ev.breakdown_json
+        FROM evaluations ev
+        WHERE ev.status='evaluated' AND ev.breakdown_json IS NOT NULL AND ev.breakdown_json != '[]' AND ev.model_used IS NOT NULL AND ev.model_used != 'unknown'
+    """, fetch=True) or []
+    
+    question_model_stats = {}
+    for row in q_raw:
+        model = row['model_used']
+        try:
+            breakdown = json.loads(row['breakdown_json'])
+            for q in breakdown:
+                if not isinstance(q, dict): continue
+                q_no = str(q.get("q_no", "?"))
+                key = f"{model}||{q_no}"
+                if key not in question_model_stats:
+                    question_model_stats[key] = {"model": model, "q_no": q_no, "total": 0, "max_total": 0, "count": 0}
+                question_model_stats[key]["total"] += float(q.get("marks_awarded", 0))
+                question_model_stats[key]["max_total"] += float(q.get("max_marks", 10))
+                question_model_stats[key]["count"] += 1
+        except:
+            pass
+    
+    question_data = []
+    for k, v in question_model_stats.items():
+        if v["count"] > 0:
+            question_data.append({
+                "model": v["model"],
+                "q_no": f"Q{v['q_no']}",
+                "avg_marks": round(v["total"] / v["count"], 1),
+                "avg_pct": round(v["total"] / v["max_total"] * 100, 1) if v["max_total"] > 0 else 0
+            })
+    
+    return {
+        "model_stats": model_stats,
+        "grade_dist": grade_dist,
+        "course_model": course_model,
+        "student_scores": student_scores,
+        "question_data": question_data
+    }
+
 @app.get("/api/settings")
 async def get_settings():
     from dotenv import dotenv_values
@@ -388,7 +512,7 @@ async def reset_db():
     return {"message": "Database reset"}
 
 @app.get("/api/ai_insights/generate")
-async def get_ai_insights(division: Optional[str] = None, exam_type: Optional[str] = None):
+async def get_ai_insights(division: Optional[str] = None, exam_type: Optional[str] = None, course_name: Optional[str] = None):
     where_clause = "ev.status = 'evaluated'"
     params = []
     if division and division != 'All':
@@ -397,6 +521,9 @@ async def get_ai_insights(division: Optional[str] = None, exam_type: Optional[st
     if exam_type and exam_type != 'All':
         where_clause += " AND su.exam_type = ?"
         params.append(exam_type)
+    if course_name and course_name != 'All':
+        where_clause += " AND su.course_name = ?"
+        params.append(course_name)
 
     query = f"SELECT ev.breakdown_json, ev.grade FROM evaluations ev JOIN submissions su ON ev.submission_id = su.id WHERE {where_clause} AND ev.breakdown_json IS NOT NULL AND ev.breakdown_json != '[]'"
     res = execute_query(query, tuple(params), fetch=True) or []

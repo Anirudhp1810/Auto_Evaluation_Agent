@@ -3,15 +3,17 @@ import json
 import re
 import os
 from datetime import datetime
-import google.generativeai as genai
-from dotenv import load_dotenv
-
-load_dotenv()
-
 from dotenv import load_dotenv
 import requests
 
 load_dotenv()
+
+try:
+    import google.generativeai as genai
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+    print("google.generativeai not installed. Gemini provider will not be available.")
 
 # We are no longer using Gemini! The system will now use local Llama 3.
 
@@ -47,35 +49,70 @@ def clean_json_output(output_text: str) -> dict:
         return {}
 
 def run_grading_agents(raw_text: str, rubric_json_str: str) -> dict:
-    """Invokes Gemini directly to evaluate the extracted answers against the rubric."""
-    prompt = f"""
-You are an expert AI grader evaluator. 
-Evaluate the following student's extracted answers against the provided Rubric JSON.
+    """Invokes the configured AI to evaluate student answers against a rubric."""
+    
+    # Parse rubric to build a richer prompt section
+    rubric_section = rubric_json_str
+    try:
+        rubric_obj = json.loads(rubric_json_str)
+        questions = rubric_obj.get("questions", [])
+        if questions and isinstance(questions, list):
+            lines = []
+            for q in questions:
+                q_no = q.get("q_no", "?")
+                max_m = q.get("max_marks", 10)
+                topic = q.get("topic", "")
+                keywords = q.get("expected_keywords", "")
+                line = f"Question {q_no} ({max_m} marks)"
+                if topic and topic.strip() and not topic.startswith("e.g."):
+                    line += f" — Topic: {topic}"
+                if keywords and keywords.strip():
+                    line += f" — Key concepts (accept synonyms): {keywords}"
+                lines.append(line)
+            rubric_section = "\n".join(lines)
+    except:
+        pass  # If rubric is not valid JSON, pass raw string
+    
+    prompt = f"""You are a strict but fair university exam grader. Your job is to evaluate a student's handwritten answers that were extracted via OCR.
+
+IMPORTANT GRADING RULES:
+- Award marks based on correctness, completeness, and clarity of the answer.
+- The rubric may list "expected_keywords". These are GUIDE CONCEPTS, not exact strings. Accept synonyms, abbreviations, equivalent terms, and conceptually similar explanations. For example: "VM" = "virtual machine", "attention mechanism" = "self-attention", "cloud storage" = "S3", "bias" = "prejudice in training data". The student does NOT need to use the exact words from the rubric.
+- If the rubric only has question numbers and max marks (no topic/keywords), use your subject expertise to evaluate the quality of the response.
+- Award partial marks proportionally. Do NOT give 0 unless the answer is completely wrong or missing.
+- If OCR text is garbled or unreadable for a question, award 0 and note "Answer unreadable (OCR failure)" as the reason.
+- The "reason" field MUST explain specifically why marks were awarded or deducted.
 
 Student's Extracted Answers (from OCR):
+---
 {raw_text}
+---
 
-Rubric JSON (Answer Key & Marks):
-{rubric_json_str}
+Rubric / Answer Key:
+---
+{rubric_section}
+---
 
-Output your evaluation strictly in the following JSON format:
+Respond with ONLY valid JSON in this exact format (no markdown, no explanation outside JSON):
 {{
     "grades": {{
-        "1": {{"score": 5, "max": 10, "reason": "explanation of marks awarded/deducted"}},
-        "2": {{"score": 10, "max": 10, "reason": "perfect answer"}}
+        "1": {{"score": 7, "max": 10, "reason": "Correct concept but missed edge case X"}},
+        "2": {{"score": 10, "max": 10, "reason": "Complete and accurate answer"}}
     }},
-    "report_text": "Write a friendly, paragraph-long overview summarizing the student's performance, highlighting strengths and suggesting areas for improvement."
+    "report_text": "2-3 sentence summary of student performance, mentioning strongest and weakest areas."
 }}
 
-Do not add extra markdown formatting around the output, just valid JSON output.
-The keys inside "grades" must perfectly match the question numbers in the rubric.
+The keys inside "grades" MUST match the question numbers from the rubric exactly.
 """
 
     provider = os.environ.get("AI_PROVIDER", "ollama").lower()
+    model_used = "unknown"
     
     try:
         if provider == "gemini":
             print("Sending evaluation request to Google Gemini API...")
+            if not HAS_GENAI:
+                raise Exception("google.generativeai package is not installed.")
             api_key = os.environ.get("GEMINI_API_KEY")
             if not api_key:
                 raise Exception("GEMINI_API_KEY is not set in settings.")
@@ -84,9 +121,10 @@ The keys inside "grades" must perfectly match the question numbers in the rubric
             model = genai.GenerativeModel("gemini-1.5-pro")
             response = model.generate_content(prompt)
             grader_output = response.text
+            model_used = "Gemini 1.5 Pro"
         else:
-            print("Sending evaluation request to Local Ollama...")
             ollama_model = os.environ.get("OLLAMA_MODEL", "llama3")
+            print(f"Sending evaluation request to Local Ollama ({ollama_model})...")
             payload = {
                 "model": ollama_model,
                 "prompt": prompt,
@@ -96,6 +134,7 @@ The keys inside "grades" must perfectly match the question numbers in the rubric
             res = requests.post("http://127.0.0.1:11434/api/generate", json=payload)
             res.raise_for_status()
             grader_output = res.json().get("response", "")
+            model_used = f"Ollama ({ollama_model})"
         
         try:
             start_idx = grader_output.find('{')
@@ -123,34 +162,78 @@ The keys inside "grades" must perfectly match the question numbers in the rubric
             "total_max": total_max,
             "report_text": report_text,
             "raw_grader_output": grader_output,
-            "extracted_answers": raw_text
+            "extracted_answers": raw_text,
+            "model_used": model_used
         }
     except Exception as e:
-        return {}
+        print(f"AI Execution Error: {e}")
+        return {"model_used": model_used}
 
 def generate_class_insight(class_data: list) -> dict:
-    """Takes a list of student performance data (grades, question scores, comments) and asks the LLM to generate class-level insights."""
+    """Analyzes aggregated class performance data and generates actionable insights."""
     if not class_data:
         return {"summary": "No evaluation data available to analyze.", "strengths": [], "weaknesses": [], "recommendations": []}
 
-    data_str = json.dumps(class_data, indent=2)
-    prompt = f"""
-You are an expert AI Education Analyst. 
-Analyze the following detailed performance data for a class. It includes the overall grades, question-by-question marks, and specific grader comments for students.
+    # Pre-aggregate statistics so the LLM gets clean numbers, not raw dumps
+    total_students = len(class_data)
+    grade_counts = {}
+    question_stats = {}  # q_no -> {total_awarded, total_max, count, sample_comments}
+    
+    for student in class_data:
+        g = student.get("grade", "?")
+        grade_counts[g] = grade_counts.get(g, 0) + 1
+        for q_line in student.get("performance", []):
+            try:
+                # Parse "Q1: 9/10 - comment" format
+                parts = q_line.split(" - ", 1)
+                q_and_marks = parts[0]
+                comment = parts[1] if len(parts) > 1 else ""
+                q_no = q_and_marks.split(":")[0].strip()
+                marks_str = q_and_marks.split(":")[1].strip()
+                awarded, maximum = marks_str.split("/")
+                awarded, maximum = float(awarded), float(maximum)
+                
+                if q_no not in question_stats:
+                    question_stats[q_no] = {"total_awarded": 0, "total_max": 0, "count": 0, "comments": []}
+                question_stats[q_no]["total_awarded"] += awarded
+                question_stats[q_no]["total_max"] += maximum
+                question_stats[q_no]["count"] += 1
+                if comment and len(question_stats[q_no]["comments"]) < 3:
+                    question_stats[q_no]["comments"].append(comment.strip())
+            except:
+                pass
+    
+    # Build a clean summary table
+    q_summary_lines = []
+    for q_no in sorted(question_stats.keys()):
+        s = question_stats[q_no]
+        avg_pct = round((s["total_awarded"] / s["total_max"] * 100), 1) if s["total_max"] > 0 else 0
+        avg_awarded = round(s["total_awarded"] / s["count"], 1)
+        avg_max = round(s["total_max"] / s["count"], 1)
+        comments_str = "; ".join(s["comments"]) if s["comments"] else "No comments"
+        q_summary_lines.append(f"{q_no}: Avg {avg_awarded}/{avg_max} ({avg_pct}%) — Grader notes: {comments_str}")
+    
+    q_summary = "\n".join(q_summary_lines) if q_summary_lines else "No question-level data available."
+    grade_summary = ", ".join([f"{g}: {c} students" for g, c in sorted(grade_counts.items())])
+    
+    prompt = f"""You are a university teaching assistant analyzing exam results for a professor.
 
-Class Performance Data:
-{data_str}
+Here is a statistical summary of {total_students} students' performance:
 
-Based strictly on this data, provide a highly accurate class-level insight report. Look at which questions have low marks and read the associated comments to identify the actual weaknesses. Look at high marks to identify strengths.
+Grade Distribution: {grade_summary}
 
-Output strictly in the following JSON format:
+Question-by-Question Average Performance:
+{q_summary}
+
+Based on this data, write a clear and actionable insight report. Be SPECIFIC — reference actual question numbers and the grader comments.
+
+Respond with ONLY valid JSON (no markdown, no extra text):
 {{
-    "summary": "A friendly 2-3 sentence overview of the class's general performance and overall accuracy.",
-    "strengths": ["Specific Topic/Concept from questions they scored high on", "Another specific strength"],
-    "weaknesses": ["Specific topic/concept from questions they scored poorly on", "Another specific weakness"],
-    "recommendations": ["Actionable advice for the teacher on what topics to review next", "Another specific recommendation"]
+    "summary": "2-3 sentence overview: how many students, overall pass rate, general trend.",
+    "strengths": ["Question X: students scored well because [specific reason from grader comments]"],
+    "weaknesses": ["Question Y: students struggled because [specific reason from grader comments]"],
+    "recommendations": ["Review [specific topic from weak questions] before the next exam"]
 }}
-Do not add extra markdown formatting, only valid JSON. Do not hallucinate. Base everything strictly on the data provided.
 """
 
     provider = os.environ.get("AI_PROVIDER", "ollama").lower()
@@ -210,6 +293,7 @@ def execute_grading_pipeline(sub_id, file_path, ocr_text, rubrics_json_str, tota
         calc_total_score = result.get('total_score', 0)
         report_text = result.get('report_text', '')
         grades_data = result.get('grades_data', {})
+        model_used = result.get('model_used', 'unknown')
 
         if not grades_data and not report_text:
             raise Exception("No evaluation was returned by the AI agent.")
@@ -259,8 +343,8 @@ def execute_grading_pipeline(sub_id, file_path, ocr_text, rubrics_json_str, tota
         cursor = conn.cursor()
         
         cursor.execute(
-            "INSERT INTO evaluations (submission_id, total_score, grade, feedback, breakdown_json, pdf_path, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (sub_id, calc_total_score, grade, feedback, json.dumps(breakdown), pdf_path, 'evaluated')
+            "INSERT INTO evaluations (submission_id, total_score, grade, feedback, breakdown_json, pdf_path, status, model_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (sub_id, calc_total_score, grade, feedback, json.dumps(breakdown), pdf_path, 'evaluated', model_used)
         )
         
         if pdf_path:
